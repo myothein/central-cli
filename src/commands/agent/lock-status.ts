@@ -7,7 +7,7 @@ export const agentLockStatusCommand = new Command("status")
     .description("Show agent lock status")
     .action(async () => {
         try {
-            const lockInfo = await apiClient.get("/agents/lock/status");
+            const lockInfo = await apiClient.get<{locked:boolean;owner?:string}>("/agents/lock/status");
             console.log(lockInfo.locked
                 ? chalk.red(`Agent is locked by ${lockInfo.owner}`)
                 : chalk.green("Agent is not locked"));
