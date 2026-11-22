@@ -36,7 +36,7 @@ test('Central v1 tenant list, status, pause, resume use correct envelope and sco
             paused=true;res.end(JSON.stringify({success:true,data:{...tenant,status:'SUSPENDED'}}));return;
         }
         if(route==='/api/v1/tenants/university-ci/resume' && req.method==='POST'){
-            paused=false;res.end(JSON.stringify({success:true,data:tenant}));return;
+            paused=false;res.end(JSON.stringify({success:true,data:{...tenant,status:'ACTIVE'}}));return;
         }
         res.statusCode=404;res.end(JSON.stringify({success:false,message:'Not Found'}));
     });
