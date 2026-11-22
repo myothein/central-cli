@@ -1,76 +1,87 @@
-// packages/central-cli/src/api/client.ts
-import fetch, { RequestInit } from "node-fetch";
-import { loadConfig } from "../config/load-config.js";
+import { loadConfig } from '../config/load-config.js';
 
-/**
- * Central API client for central-cli
- * Uses base URL and optional API key from config
- */
-class ApiClient {
-    private baseUrl: string;
-    private apiKey?: string;
+export type ApiConfiguration = {
+    centralApiUrl: string;
+    apiKey?: string;
+};
 
-    constructor() {
-        const config = loadConfig();
-        this.baseUrl = config.centralApiUrl;
+/** Validated Central v1 API client; never logs bearer credentials or response bodies. */
+export class ApiClient {
+    private readonly baseUrl: string;
+    private readonly apiKey?: string;
+
+    constructor(config: ApiConfiguration = loadConfig()) {
+        let url: URL;
+        try { url = new URL(config.centralApiUrl); }
+        catch { throw new Error('CENTRAL_API_URL is not a valid absolute URL'); }
+        const allowedLocal = ['localhost', '127.0.0.1', '[::1]', '::1'];
+        if (!['https:', 'http:'].includes(url.protocol) ||
+            (url.protocol === 'http:' && !allowedLocal.includes(url.hostname)) ||
+            url.username || url.password || url.search || url.hash ||
+            url.pathname.replace(/\/+$/, '') !== '/api/v1') {
+            throw new Error('CENTRAL_API_URL must use HTTPS (except loopback) and end in /api/v1');
+        }
+        this.baseUrl = url.origin + '/api/v1';
         this.apiKey = config.apiKey;
     }
 
-    private async request(
-        path: string,
-        options: RequestInit = {}
-    ): Promise<any> {
-        const url = `${this.baseUrl}${path}`;
-        const headers: Record<string, string> = {
-            "Content-Type": "application/json",
-            ...options.headers,
-        };
-
-        if (this.apiKey) {
-            headers["Authorization"] = `Bearer ${this.apiKey}`;
+    private async request<T>(route: string, options: RequestInit = {}): Promise<T> {
+        if (!/^\/[a-zA-Z0-9/_-]+$/.test(route) || route.includes('//') ||
+            route.includes('..')) {
+            throw new Error('Invalid Central API route');
         }
+        if (!this.apiKey || Buffer.byteLength(this.apiKey, 'utf8') < 32) {
+            throw new Error('CENTRAL_API_KEY is not configured');
+        }
+        const headers = new Headers(options.headers);
+        headers.set('authorization', 'Bearer ' + this.apiKey);
+        headers.set('accept', 'application/json');
+        headers.set('content-type', 'application/json');
 
+        const abort = new AbortController();
+        const timeout = setTimeout(() => abort.abort(), 10_000);
         try {
-            const res = await fetch(url, { ...options, headers });
-            if (!res.ok) {
-                const text = await res.text();
-                throw new Error(
-                    `HTTP ${res.status} ${res.statusText}: ${text || ""}`
-                );
+            const response = await fetch(this.baseUrl + route, {
+                ...options, headers, signal: abort.signal
+            });
+            if (!response.ok) {
+                // Remote responses may contain sensitive information: never log their body.
+                throw new Error('Central API returned HTTP ' + response.status);
             }
-            // Assume JSON response
-            return await res.json();
-        } catch (err: any) {
-            throw new Error(`API request failed: ${err.message}`);
-        }
+            let parsed: unknown;
+            try { parsed = await response.json(); }
+            catch { throw new Error('Central API returned invalid JSON'); }
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) ||
+                !('success' in parsed) || (parsed as { success: unknown }).success !== true ||
+                !('data' in parsed)) {
+                throw new Error('Central API returned an invalid response envelope');
+            }
+            return (parsed as { data: T }).data;
+        } catch (error) {
+            if (abort.signal.aborted) throw new Error('Central API request timed out');
+            if (error instanceof Error && error.message.startsWith('Central API')) {
+                throw error;
+            }
+            throw new Error('Central API connection failed');
+        } finally { clearTimeout(timeout); }
     }
 
-    // GET request
-    async get(path: string): Promise<any> {
-        return this.request(path, { method: "GET" });
+    get<T = unknown>(path: string): Promise<T> {
+        return this.request<T>(path, {method:'GET'});
     }
-
-    // POST request
-    async post(path: string, body?: any): Promise<any> {
-        return this.request(path, {
-            method: "POST",
-            body: body ? JSON.stringify(body) : undefined,
+    post<T = unknown>(path: string, body?: unknown): Promise<T> {
+        return this.request<T>(path, {
+            method:'POST', ...(body === undefined ? {} : {body:JSON.stringify(body)})
         });
     }
-
-    // PUT request
-    async put(path: string, body?: any): Promise<any> {
-        return this.request(path, {
-            method: "PUT",
-            body: body ? JSON.stringify(body) : undefined,
+    put<T = unknown>(path: string, body?: unknown): Promise<T> {
+        return this.request<T>(path, {
+            method:'PUT', ...(body === undefined ? {} : {body:JSON.stringify(body)})
         });
     }
-
-    // DELETE request
-    async delete(path: string): Promise<any> {
-        return this.request(path, { method: "DELETE" });
+    delete<T = unknown>(path: string): Promise<T> {
+        return this.request<T>(path, {method:'DELETE'});
     }
 }
 
-// Export a singleton client instance
 export const apiClient = new ApiClient();

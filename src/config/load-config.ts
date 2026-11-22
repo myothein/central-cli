@@ -1,7 +1,7 @@
-// packages/central-cli/src/config/load-config.ts
+/** Safe local-development default; any remote Central API must use HTTPS. */
 export function loadConfig() {
     return {
-        centralApiUrl: process.env.CENTRAL_API_URL || "http://localhost:5000/api",
+        centralApiUrl: process.env.CENTRAL_API_URL || 'http://127.0.0.1:3000/api/v1',
         apiKey: process.env.CENTRAL_API_KEY || undefined,
     };
 }

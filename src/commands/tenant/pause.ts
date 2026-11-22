@@ -1,23 +1,18 @@
-// packages/central-cli/src/commands/tenant/pause.ts
-import { Command } from "commander";
-import { apiClient } from "../../api/client.js";
-import chalk from "chalk";
+import { Command } from 'commander';
+import { assertTenantId, setTenantPaused } from './tenant-api.js';
 
-export const tenantPauseCommand = new Command("pause")
-    .description("Pause a tenant (stop event processing & projections)")
-    .argument("<tenantId>", "Tenant ID to pause")
-    .option("--dry-run", "Show what would happen without actually pausing")
-    .action(async (tenantId: string, options: { dryRun?: boolean }) => {
+export const tenantPauseCommand = new Command('pause')
+    .description('Suspend a tenant in Central Service')
+    .argument('<tenantId>','Tenant to suspend')
+    .option('--dry-run','Validate without writing')
+    .action(async(tenantId:string,options:{dryRun?:boolean})=>{
         try {
-            if (options.dryRun) {
-                console.log(chalk.blue(`[Dry Run] Tenant ${tenantId} would be paused.`));
-                return;
-            }
-
-            await apiClient.post(`/tenants/${tenantId}/pause`);
-            console.log(chalk.green(`Tenant ${tenantId} paused successfully.`));
-        } catch (err: any) {
-            console.error(chalk.red(`Failed to pause tenant ${tenantId}:`), err.message);
-            process.exit(1);
+            const id=assertTenantId(tenantId);
+            if(options.dryRun) {console.log('DRY RUN: would suspend tenant '+id);return;}
+            const result=await setTenantPaused(id,true);
+            console.log('Tenant '+result.id+' status: '+result.status);
+        }catch(error){
+            console.error('Tenant pause failed:',error instanceof Error?error.message:'Unknown error');
+            process.exitCode=1;
         }
     });

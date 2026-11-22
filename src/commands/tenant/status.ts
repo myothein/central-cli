@@ -1,55 +1,32 @@
-import { Command } from "commander";
-import { renderTable } from "../../output/table.js";
-import { onlineIcon, onlineLabel } from "../../output/icons.js";
-import { formatRelativeTime } from "../../output/time.js";
-import { apiClient } from "../../api/client.js";
-import chalk from "chalk";
+import { Command } from 'commander';
+import { renderTable } from '../../output/table.js';
+import { formatRelativeTime } from '../../output/time.js';
+import { listTenantStatuses } from './tenant-api.js';
 
-interface TenantStatus {
-    tenantId: string;
-    status: "ACTIVE" | "SUSPENDED" | "DOWN" | "UNKNOWN" | "DEGRADED";
-    online: boolean | null;
-    lastHeartbeat: string | null;
-}
-
-const REFRESH_INTERVAL = 5000; // 5 seconds
-
-export const tenantStatusCommand = new Command("status")
-    .description("Show tenant status (online/offline)")
-    .option("--once", "Show tenant status once and exit")
-    .action(async (options: { once?: boolean }) => {
-        let stopped = false;
-
-        // Handle Ctrl+C cleanly
-        process.on("SIGINT", () => {
-            stopped = true;
-            console.log(chalk.yellow("\nExiting tenant status view..."));
-            process.exit(0);
-        });
-
-        do {
-            try {
-                const tenants: TenantStatus[] = await apiClient.get("/tenants/status");
-
-                const rows = tenants.map(t => ({
-                    TENANT: t.tenantId,
-                    STATUS: t.status,
-                    ONLINE: `${onlineIcon(t.online)} ${onlineLabel(t.online)}`,
-                    "LAST SEEN": t.lastHeartbeat ? formatRelativeTime(t.lastHeartbeat) : "—",
-                }));
-
-                console.clear();
-                renderTable(rows);
-
-                if (options.once) break;
-            } catch (err: any) {
-                console.error(chalk.red("Failed to fetch tenant status:"), err.message);
-                if (options.once) process.exit(1);
-            }
-
-            // Wait before next refresh
-            if (!options.once) {
-                await new Promise(r => setTimeout(r, REFRESH_INTERVAL));
-            }
-        } while (!stopped && !options.once);
+const intervalMs = 5_000;
+export const tenantStatusCommand = new Command('status')
+    .description('Show central tenant online/offline status')
+    .option('--once','Fetch once and exit')
+    .action(async(options:{once?:boolean})=>{
+        let stopped=false;
+        const onSignal=()=>{ stopped=true; };
+        process.on('SIGINT',onSignal);
+        try {
+            do {
+                try {
+                    const rows=(await listTenantStatuses()).map(t=>({
+                        TENANT:t.id, STATUS:t.status,
+                        ONLINE:t.online===true?'Online':t.online===false?'Offline':'Unknown',
+                        'LAST SEEN':t.lastHeartbeat?formatRelativeTime(t.lastHeartbeat):'—'
+                    }));
+                    if(process.stdout.isTTY) console.clear();
+                    renderTable(rows);
+                } catch(error) {
+                    console.error('Tenant status failed:',error instanceof Error?error.message:'Unknown error');
+                    process.exitCode=1;
+                    break;
+                }
+                if(!options.once && !stopped) await new Promise(resolve=>setTimeout(resolve,intervalMs));
+            } while(!stopped && !options.once);
+        } finally {process.off('SIGINT',onSignal);}
     });

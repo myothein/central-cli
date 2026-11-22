@@ -1,30 +1,18 @@
-import { Command } from "commander";
-import { renderTable } from "../../output/table.js";
-import { apiClient } from "../../api/client.js";
+import { Command } from 'commander';
+import { renderTable } from '../../output/table.js';
+import { listTenants } from './tenant-api.js';
 
-// Tenant list interface
-interface TenantInfo {
-    tenantId: string;
-    name: string;
-    status: string;
-    createdAt: string;
-}
-
-export const tenantListCommand = new Command("list")
-    .description("List all tenants")
-    .action(async () => {
+export const tenantListCommand = new Command('list')
+    .description('List configured tenants')
+    .action(async()=>{
         try {
-            const tenants: TenantInfo[] = await apiClient.get("/tenants");
-
-            const rows = tenants.map((t) => ({
-                TENANT: t.tenantId,
-                NAME: t.name,
-                STATUS: t.status,
-                CREATED_AT: t.createdAt,
+            const rows=(await listTenants()).map(t=>({
+                TENANT:t.id, NAME:t.name, STATUS:t.status,
+                'LAST HEARTBEAT':t.lastHeartbeat ?? '—'
             }));
-
             renderTable(rows);
-        } catch (err: any) {
-            console.error("Failed to fetch tenant list:", err.message);
+        } catch(error) {
+            console.error('Tenant list failed:',error instanceof Error ? error.message : 'Unknown error');
+            process.exitCode=1;
         }
     });
