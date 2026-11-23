@@ -2,13 +2,19 @@ import { loadConfig } from '../config/load-config.js';
 
 export type ApiConfiguration = {
     centralApiUrl: string;
+    authMode?: 'oidc' | 'legacy';
+    oidcAccessToken?: string;
     apiKey?: string;
+    allowLegacyDevApiKey?: boolean;
 };
 
 /** Validated Central v1 API client; never logs bearer credentials or response bodies. */
 export class ApiClient {
     private readonly baseUrl: string;
+    private readonly authMode: 'oidc' | 'legacy';
+    private readonly oidcAccessToken?: string;
     private readonly apiKey?: string;
+    private readonly allowLegacyDevApiKey: boolean;
 
     constructor(config: ApiConfiguration = loadConfig()) {
         let url: URL;
@@ -22,7 +28,14 @@ export class ApiClient {
             throw new Error('CENTRAL_API_URL must use HTTPS (except loopback) and end in /api/v1');
         }
         this.baseUrl = url.origin + '/api/v1';
+        const mode = config.authMode ?? 'oidc';
+        if (mode !== 'oidc' && mode !== 'legacy') {
+            throw new Error('Invalid CENTRAL_AUTH_MODE');
+        }
+        this.authMode = mode;
+        this.oidcAccessToken = config.oidcAccessToken;
         this.apiKey = config.apiKey;
+        this.allowLegacyDevApiKey = config.allowLegacyDevApiKey === true;
     }
 
     private async request<T>(route: string, options: RequestInit = {}): Promise<T> {
@@ -30,11 +43,27 @@ export class ApiClient {
             route.includes('..')) {
             throw new Error('Invalid Central API route');
         }
-        if (!this.apiKey || Buffer.byteLength(this.apiKey, 'utf8') < 32) {
-            throw new Error('CENTRAL_API_KEY is not configured');
+        let credential: string;
+        if (this.authMode === 'oidc') {
+            const token = this.oidcAccessToken;
+            // This is structural input hygiene, NOT token verification.
+            // Central Service alone validates issuer/JWKS, audience, expiry and realm role.
+            if (!token || token.length > 16_384 ||
+                !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(token)) {
+                throw new Error('CENTRAL_OIDC_ACCESS_TOKEN missing or malformed');
+            }
+            credential = token;
+        } else {
+            // Prevent shared-key Central access in production, even if opted in.
+            if (!this.allowLegacyDevApiKey ||
+                !['test', 'development'].includes(process.env.NODE_ENV || '') ||
+                !this.apiKey || Buffer.byteLength(this.apiKey, 'utf8') < 32) {
+                throw new Error('Legacy Central API credentials disabled');
+            }
+            credential = this.apiKey;
         }
         const headers = new Headers(options.headers);
-        headers.set('authorization', 'Bearer ' + this.apiKey);
+        headers.set('authorization', 'Bearer ' + credential);
         headers.set('accept', 'application/json');
         headers.set('content-type', 'application/json');
 
