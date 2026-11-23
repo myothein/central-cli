@@ -1,0 +1,130 @@
+name: Dependency bootstrap and build diagnostics
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+permissions:
+  contents: read
+jobs:
+  lockfile-bootstrap:
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'hardening/release-security-baseline-20261122' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out only the proposed branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          persist-credentials: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Generate npm lock without running dependency scripts
+        run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+      - name: Commit generated lockfile to draft branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add -- package-lock.json
+          if git diff --cached --quiet; then
+            echo 'No lockfile change'
+            exit 0
+          fi
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'build: lock dependency graph for reproducible CI'
+          git push origin "HEAD:refs/heads/${{ github.head_ref }}"
+  build-smoke:
+    needs: lockfile-bootstrap
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Clean dependency installation without lifecycle scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Compile
+        run: npm run build
+      - name: Central API contract unit tests
+        run: npm test
+
+
+  central-postgres-contract:
+    needs: lockfile-bootstrap
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      RUN_PG_INTEGRATION: '1'
+      SYSTEM_DATABASE_URL: postgresql://ci_qa:ci_only_password@127.0.0.1:5432/central_cli_ci
+      NODE_ENV: test
+      CENTRAL_ADMIN_AUTH_MODE: oidc
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: ci_qa
+          POSTGRES_PASSWORD: ci_only_password
+          POSTGRES_DB: central_cli_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci_qa -d central_cli_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout central-cli draft branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          persist-credentials: false
+      - name: Checkout pinned Central Service code for integration
+        uses: actions/checkout@v4
+        with:
+          repository: myothein/central-service
+          ref: d423d9fee7f3d382be8072f85cd98fc64be087e3
+          path: integration/central-service
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Clean compile of Central Service and CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd integration/central-service && npm ci --ignore-scripts --no-audit --no-fund && npm run build)
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run build
+      - name: Checkout audited db-helper migrations at an immutable revision
+        uses: actions/checkout@v4
+        with:
+          repository: myothein/db-helper
+          ref: cd99b4508ba4674110484527525ad9b172618b4a
+          path: integration/db-helper
+          persist-credentials: false
+      - name: Verify audited db-helper revision and stage system migration
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C integration/db-helper rev-parse HEAD)" = 'cd99b4508ba4674110484527525ad9b172618b4a'
+          cp integration/db-helper/prisma/system/migrations/001_init_system_db/migration.sql /tmp/central-cli-system.sql
+      - name: Migrate ephemeral PostgreSQL database
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const {Client} = require('./integration/central-service/node_modules/pg');
+          (async()=>{
+            const db = new Client({connectionString:process.env.SYSTEM_DATABASE_URL});
+            await db.connect();
+            try{await db.query(fs.readFileSync('/tmp/central-cli-system.sql','utf8'));}
+            finally{await db.end();}
+          })().catch(error=>{console.error('Ephemeral migration failed: '+error.name);process.exitCode=1;});
+          NODE
+      - name: Signed OIDC Central CLI + PostgreSQL 17 integration (ephemeral JWKS)
+        run: npm run test:postgres
