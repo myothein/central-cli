@@ -61,7 +61,8 @@ jobs:
     env:
       RUN_PG_INTEGRATION: '1'
       SYSTEM_DATABASE_URL: postgresql://ci_qa:ci_only_password@127.0.0.1:5432/central_cli_ci
-      CENTRAL_ADMIN_API_KEY: ci-only-central-admin-key-longer-than-32-bytes
+      NODE_ENV: test
+      CENTRAL_ADMIN_AUTH_MODE: oidc
     services:
       postgres:
         image: postgres:17
@@ -86,7 +87,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: myothein/central-service
-          ref: 26f068b862487cc9538d8a872381fac7ef82efe5
+          ref: d423d9fee7f3d382be8072f85cd98fc64be087e3
           path: integration/central-service
           persist-credentials: false
       - uses: actions/setup-node@v4
@@ -116,5 +117,5 @@ jobs:
             finally{await db.end();}
           })().catch(error=>{console.error('Ephemeral migration failed: '+error.name);process.exitCode=1;});
           NODE
-      - name: Real CLI list/status/pause/resume against Central API and PostgreSQL 17
+      - name: Signed OIDC Central CLI + PostgreSQL 17 integration (ephemeral JWKS)
         run: npm run test:postgres
