@@ -100,10 +100,19 @@ jobs:
           (cd integration/central-service && npm ci --ignore-scripts --no-audit --no-fund && npm run build)
           npm ci --ignore-scripts --no-audit --no-fund
           npm run build
-      - name: Retrieve pinned, public db-helper system migration only
+      - name: Checkout audited db-helper migrations at an immutable revision
+        uses: actions/checkout@v4
+        with:
+          repository: myothein/db-helper
+          ref: cd99b4508ba4674110484527525ad9b172618b4a
+          path: integration/db-helper
+          persist-credentials: false
+      - name: Verify audited db-helper revision and stage system migration
         shell: bash
         run: |
-          curl -fsSL --retry 3 "https://raw.githubusercontent.com/myothein/db-helper/bfae1246e28a43626e00627b9b812af579af4ab3/prisma/system/migrations/001_init_system_db/migration.sql" -o /tmp/central-cli-system.sql
+          set -euo pipefail
+          test "$(git -C integration/db-helper rev-parse HEAD)" = 'cd99b4508ba4674110484527525ad9b172618b4a'
+          cp integration/db-helper/prisma/system/migrations/001_init_system_db/migration.sql /tmp/central-cli-system.sql
       - name: Migrate ephemeral PostgreSQL database
         shell: bash
         run: |
