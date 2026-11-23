@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
 import { createServer } from 'node:http';
-import { generateKeyPairSync, sign as rsaSign } from 'node:crypto';
+import { generateKeyPairSync, sign as rsaSign, type KeyObject } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -17,7 +17,7 @@ const central = load(path.resolve('integration/central-service/dist/server.js'))
 const dbFns = load(path.resolve('integration/central-service/dist/infrastructure/db/system-pool.js'));
 const execFileAsync = promisify(execFile);
 
-function signJwt(key: ReturnType<typeof generateKeyPairSync>['privateKey'],
+function signJwt(key: KeyObject,
     issuer: string, audience: string, roles: string[]) {
     const header = Buffer.from(JSON.stringify({ alg: 'RS256', typ: 'JWT', kid: 'central-ci' }))
         .toString('base64url');
